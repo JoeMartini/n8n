@@ -9,6 +9,10 @@ import { mock } from 'jest-mock-extended';
 
 import { AuthHandlerRegistry } from '@/auth/auth-handler.registry';
 import type { EmailAuthHandler } from '@/auth/handlers/email.auth-handler';
+import { AuthIdentityRepository } from '@n8n/db';
+import { GlobalConfig } from '@n8n/config';
+import { JwtService } from '@/services/jwt.service';
+import { UrlService } from '@/services/url.service';
 import { AuthService } from '@/auth/auth.service';
 import config from '@/config';
 import { EventService } from '@/events/event.service';
@@ -37,6 +41,7 @@ describe('AuthController', () => {
 	mockInstance(UserRepository);
 	mockInstance(PostHogClient);
 	mockInstance(License);
+	mockInstance(AuthIdentityRepository);
 	const ldapService = mockInstance(LdapService);
 	const authHandlerRegistry = mockInstance(AuthHandlerRegistry);
 	const emailAuthHandler = mock<EmailAuthHandler>();
@@ -45,6 +50,10 @@ describe('AuthController', () => {
 	const authService = Container.get(AuthService);
 	const eventsService = Container.get(EventService);
 	const postHog = Container.get(PostHogClient);
+	const authIdentityRepository = Container.get(AuthIdentityRepository);
+	const globalConfig = Container.get(GlobalConfig);
+	const jwtService = Container.get(JwtService);
+	const urlService = Container.get(UrlService);
 
 	describe('login', () => {
 		beforeEach(() => {
@@ -242,8 +251,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -275,8 +288,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -312,8 +329,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -350,8 +371,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -399,8 +424,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -448,8 +477,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -505,8 +538,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -562,8 +599,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -596,8 +637,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 
@@ -629,8 +674,12 @@ describe('AuthController', () => {
 				userService,
 				license,
 				userRepository,
+				authIdentityRepository,
 				eventService,
 				authHandlerRegistry,
+				globalConfig,
+				jwtService,
+				urlService,
 				postHog,
 			);
 

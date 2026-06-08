@@ -16,6 +16,34 @@ class OidcConfig {
 	/** Whether OIDC-based single sign-on is enabled. */
 	@Env('N8N_SSO_OIDC_LOGIN_ENABLED')
 	loginEnabled: boolean = false;
+
+	/** OIDC issuer URL (also used as discovery endpoint). */
+	@Env('N8N_SSO_OIDC_ISSUER_URL')
+	issuerUrl: string = '';
+
+	/** OIDC client ID. */
+	@Env('N8N_SSO_OIDC_CLIENT_ID')
+	clientId: string = '';
+
+	/** OIDC client secret. */
+	@Env('N8N_SSO_OIDC_CLIENT_SECRET')
+	clientSecret: string = '';
+
+	/** OIDC redirect URI (defaults to /login/oidc/callback if empty). */
+	@Env('N8N_SSO_OIDC_REDIRECT_URI')
+	redirectUri: string = '';
+
+	/** Name of the OIDC claim to use for role mapping. */
+	@Env('N8N_SSO_OIDC_ROLE_CLAIM')
+	roleClaim: string = 'role';
+
+	/** Value of the role claim that indicates an admin user. */
+	@Env('N8N_SSO_OIDC_ADMIN_ROLE')
+	adminRole: string = 'admin';
+
+	/** Whether to automatically create user accounts on first OIDC login. */
+	@Env('N8N_SSO_OIDC_AUTO_PROVISION')
+	autoProvision: boolean = true;
 }
 
 @Config

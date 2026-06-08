@@ -79,6 +79,13 @@ export function isOidcCurrentAuthenticationMethod(): boolean {
 	return getCurrentAuthenticationMethod() === 'oidc';
 }
 
+/**
+ * Check whether the OIDC feature is enabled in the instance (community or enterprise)
+ */
+export function isOidcLoginEnabled(): boolean {
+	return Container.get(GlobalConfig).sso.oidc.loginEnabled;
+}
+
 export function isSsoCurrentAuthenticationMethod(): boolean {
 	return (
 		isSamlCurrentAuthenticationMethod() ||

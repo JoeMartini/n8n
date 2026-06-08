@@ -16,7 +16,7 @@ const onSSOLogin = async () => {
 			? await ssoStore.getSSORedirectUrl(
 					typeof route.query?.redirect === 'string' ? route.query.redirect : '',
 				)
-			: ssoStore.oidc.loginUrl;
+			: ssoStore.oidcLoginUrl;
 		window.location.href = redirectUrl ?? '';
 	} catch (error) {
 		toast.showError(error, 'Error', { message: error.message });
@@ -25,7 +25,10 @@ const onSSOLogin = async () => {
 </script>
 
 <template>
-	<div v-if="ssoStore.showSsoLoginButton" :class="$style.ssoLogin">
+	<div
+		v-if="ssoStore.showSsoLoginButton || ssoStore.isCommunityOidcEnabled"
+		:class="$style.ssoLogin"
+	>
 		<div :class="$style.divider">
 			<span>{{ i18n.baseText('sso.login.divider') }}</span>
 		</div>

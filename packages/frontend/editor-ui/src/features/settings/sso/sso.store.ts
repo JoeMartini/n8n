@@ -33,6 +33,12 @@ export const useSSOStore = defineStore('sso', () => {
 				isDefaultAuthenticationOidc.value),
 	);
 
+	const isCommunityOidcEnabled = computed(
+		() => oidc.value.loginEnabled && !!oidc.value.loginUrl && !isEnterpriseOidcEnabled.value,
+	);
+
+	const oidcLoginUrl = computed(() => oidc.value.loginUrl ?? '');
+
 	const getSSORedirectUrl = async (existingRedirect?: string) =>
 		await ssoApi.initSSO(rootStore.restApiContext, existingRedirect);
 
@@ -211,6 +217,8 @@ export const useSSOStore = defineStore('sso', () => {
 
 	return {
 		showSsoLoginButton,
+		isCommunityOidcEnabled,
+		oidcLoginUrl,
 		getSSORedirectUrl,
 		initialize,
 		selectedAuthProtocol,

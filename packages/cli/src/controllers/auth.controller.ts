@@ -2,7 +2,15 @@ import { LoginRequestDto, ResolveSignupTokenQueryDto } from '@n8n/api-types';
 import { Logger } from '@n8n/backend-common';
 import { Time } from '@n8n/constants';
 import type { User, PublicUser, AuthProviderType } from '@n8n/db';
-import { UserRepository, AuthenticatedRequest, GLOBAL_OWNER_ROLE } from '@n8n/db';
+import {
+	AuthIdentityRepository,
+	UserRepository,
+	AuthenticatedRequest,
+	GLOBAL_ADMIN_ROLE,
+	GLOBAL_MEMBER_ROLE,
+	GLOBAL_OWNER_ROLE,
+	isValidEmail,
+} from '@n8n/db';
 import {
 	Body,
 	createBodyKeyedRateLimiter,
@@ -11,12 +19,18 @@ import {
 	Query,
 	RestController,
 } from '@n8n/decorators';
+import { GlobalConfig } from '@n8n/config';
 import { isEmail } from 'class-validator';
 import { Response } from 'express';
+import { randomUUID } from 'crypto';
 
 import { AuthHandlerRegistry } from '@/auth/auth-handler.registry';
 import { AuthService } from '@/auth/auth.service';
-import { RESPONSE_ERROR_MESSAGES } from '@/constants';
+import {
+	OIDC_NONCE_COOKIE_NAME,
+	OIDC_STATE_COOKIE_NAME,
+	RESPONSE_ERROR_MESSAGES,
+} from '@/constants';
 import { AuthError } from '@/errors/response-errors/auth.error';
 import { BadRequestError } from '@/errors/response-errors/bad-request.error';
 import { ForbiddenError } from '@/errors/response-errors/forbidden.error';
@@ -26,6 +40,8 @@ import { License } from '@/license';
 import { MfaService } from '@/mfa/mfa.service';
 import { PostHogClient } from '@/posthog';
 import { AuthlessRequest } from '@/requests';
+import { JwtService } from '@/services/jwt.service';
+import { UrlService } from '@/services/url.service';
 import { UserService } from '@/services/user.service';
 import {
 	getCurrentAuthenticationMethod,
@@ -44,8 +60,12 @@ export class AuthController {
 		private readonly userService: UserService,
 		private readonly license: License,
 		private readonly userRepository: UserRepository,
+		private readonly authIdentityRepository: AuthIdentityRepository,
 		private readonly eventService: EventService,
 		private readonly authHandlerRegistry: AuthHandlerRegistry,
+		private readonly globalConfig: GlobalConfig,
+		private readonly jwtService: JwtService,
+		private readonly urlService: UrlService,
 		private readonly postHog?: PostHogClient,
 	) {}
 
@@ -200,6 +220,288 @@ export class AuthController {
 		});
 	}
 
+	/** Redirect to OIDC identity provider for community edition SSO */
+	@Get('/login/oidc', { skipAuth: true })
+	async oidcLogin(_req: AuthlessRequest, res: Response) {
+		const oidcConfig = this.globalConfig.sso.oidc;
+		if (
+			!oidcConfig.loginEnabled ||
+			!oidcConfig.issuerUrl ||
+			!oidcConfig.clientId ||
+			!oidcConfig.clientSecret
+		) {
+			this.logger.error('OIDC login is not configured');
+			throw new BadRequestError('OIDC login is not configured');
+		}
+
+		const openidClient = await import('openid-client');
+		const issuerUrl = new URL(oidcConfig.issuerUrl);
+		const configuration = await openidClient.discovery(issuerUrl, oidcConfig.clientId, {
+			client_secret: oidcConfig.clientSecret,
+		});
+
+		const state = this.generateOidcState();
+		const nonce = this.generateOidcNonce();
+
+		const redirectUri =
+			oidcConfig.redirectUri ||
+			`${this.urlService.getInstanceBaseUrl()}/${this.globalConfig.endpoints.rest}/login/oidc/callback`;
+
+		const authorizationURL = openidClient.buildAuthorizationUrl(configuration, {
+			redirect_uri: redirectUri,
+			response_type: 'code',
+			scope: 'openid email profile',
+			state: state.plaintext,
+			nonce: nonce.plaintext,
+		});
+
+		const { samesite, secure } = this.globalConfig.auth.cookie;
+		res.cookie(OIDC_STATE_COOKIE_NAME, state.signed, {
+			maxAge: 15 * Time.minutes.toMilliseconds,
+			httpOnly: true,
+			sameSite: samesite,
+			secure,
+		});
+		res.cookie(OIDC_NONCE_COOKIE_NAME, nonce.signed, {
+			maxAge: 15 * Time.minutes.toMilliseconds,
+			httpOnly: true,
+			sameSite: samesite,
+			secure,
+		});
+
+		res.redirect(authorizationURL.toString());
+	}
+
+	/** Handle OIDC callback for community edition SSO */
+	@Get('/login/oidc/callback', { skipAuth: true })
+	async oidcCallback(req: AuthlessRequest, res: Response) {
+		const oidcConfig = this.globalConfig.sso.oidc;
+		const fullUrl = `${this.urlService.getInstanceBaseUrl()}${req.originalUrl}`;
+		const callbackUrl = new URL(fullUrl);
+
+		const state = req.cookies[OIDC_STATE_COOKIE_NAME];
+		if (typeof state !== 'string') {
+			this.logger.error('State is missing');
+			throw new BadRequestError('Invalid state');
+		}
+
+		const nonce = req.cookies[OIDC_NONCE_COOKIE_NAME];
+		if (typeof nonce !== 'string') {
+			this.logger.error('Nonce is missing');
+			throw new BadRequestError('Invalid nonce');
+		}
+
+		const { expectedState } = this.verifyOidcState(state);
+		const expectedNonce = this.verifyOidcNonce(nonce);
+
+		res.clearCookie(OIDC_STATE_COOKIE_NAME);
+		res.clearCookie(OIDC_NONCE_COOKIE_NAME);
+
+		const openidClient = await import('openid-client');
+		const issuerUrl = new URL(oidcConfig.issuerUrl);
+		const configuration = await openidClient.discovery(issuerUrl, oidcConfig.clientId, {
+			client_secret: oidcConfig.clientSecret,
+		});
+
+		let tokens;
+		try {
+			tokens = await openidClient.authorizationCodeGrant(configuration, callbackUrl, {
+				expectedState,
+				expectedNonce,
+			});
+		} catch (error) {
+			this.logger.error('Failed to exchange authorization code for tokens', { error });
+			throw new BadRequestError('Invalid authorization code');
+		}
+
+		let claims;
+		try {
+			claims = tokens.claims();
+		} catch (error) {
+			this.logger.error('Failed to extract claims from tokens', { error });
+			throw new BadRequestError('Invalid token');
+		}
+
+		if (!claims) {
+			throw new ForbiddenError('No claims found in the OIDC token');
+		}
+
+		let userInfo;
+		try {
+			userInfo = await openidClient.fetchUserInfo(configuration, tokens.access_token, claims.sub);
+		} catch (error) {
+			this.logger.error('Failed to fetch user info', { error });
+			throw new BadRequestError('Invalid token');
+		}
+
+		if (!userInfo.email) {
+			throw new BadRequestError('An email is required');
+		}
+
+		if (!isValidEmail(userInfo.email)) {
+			throw new BadRequestError('Invalid email format');
+		}
+
+		const user = await this.findOrCreateOidcUser(claims.sub, userInfo);
+		await this.applyOidcRoleMapping(user, claims);
+
+		this.authService.issueCookie(res, user, true, req.browserId);
+		this.eventService.emit('user-logged-in', {
+			user,
+			authenticationMethod: 'oidc',
+		});
+
+		return res.redirect('/');
+	}
+
+	private generateOidcState() {
+		const state = `n8n_state:${randomUUID()}`;
+		return {
+			signed: this.jwtService.sign({ state }, { expiresIn: '15m' }),
+			plaintext: state,
+		};
+	}
+
+	private verifyOidcState(signedState: string): { expectedState: string } {
+		try {
+			const decoded = this.jwtService.verify(signedState);
+			if (typeof decoded?.state !== 'string') {
+				throw new BadRequestError('Invalid state');
+			}
+			return { expectedState: decoded.state };
+		} catch {
+			throw new BadRequestError('Invalid state');
+		}
+	}
+
+	private generateOidcNonce() {
+		const nonce = `n8n_nonce:${randomUUID()}`;
+		return {
+			signed: this.jwtService.sign({ nonce }, { expiresIn: '15m' }),
+			plaintext: nonce,
+		};
+	}
+
+	private verifyOidcNonce(signedNonce: string): string {
+		try {
+			const decoded = this.jwtService.verify(signedNonce);
+			if (typeof decoded?.nonce !== 'string') {
+				throw new BadRequestError('Invalid nonce');
+			}
+			return decoded.nonce;
+		} catch {
+			throw new BadRequestError('Invalid nonce');
+		}
+	}
+
+	private async findOrCreateOidcUser(providerId: string, userInfo: any): Promise<User> {
+		const openidUser = await this.authIdentityRepository.findOne({
+			where: { providerId, providerType: 'oidc' },
+			relations: {
+				user: {
+					role: true,
+				},
+			},
+		});
+
+		if (openidUser) {
+			return openidUser.user;
+		}
+
+		const foundUser = await this.userRepository.findOne({
+			where: { email: userInfo.email },
+			relations: ['authIdentities', 'role'],
+		});
+
+		if (foundUser) {
+			this.logger.debug(
+				`OIDC login: User with email ${userInfo.email} already exists, linking OIDC identity.`,
+			);
+			const id = this.authIdentityRepository.create({
+				providerId,
+				providerType: 'oidc',
+				userId: foundUser.id,
+			});
+			await this.authIdentityRepository.save(id);
+			return foundUser;
+		}
+
+		const oidcConfig = this.globalConfig.sso.oidc;
+		if (!oidcConfig.autoProvision && !this.globalConfig.sso.justInTimeProvisioning) {
+			throw new ForbiddenError('User not found and auto-provisioning is disabled');
+		}
+
+		const { user: newUser } = await this.userRepository.createUserWithProject({
+			firstName: userInfo.given_name || userInfo.name?.split(' ')[0] || '',
+			lastName: userInfo.family_name || userInfo.name?.split(' ').slice(1).join(' ') || '',
+			email: userInfo.email,
+			authIdentities: [],
+			role: GLOBAL_MEMBER_ROLE,
+			password: 'no password set',
+		});
+
+		await this.authIdentityRepository.save(
+			this.authIdentityRepository.create({
+				providerId,
+				providerType: 'oidc',
+				userId: newUser.id,
+			}),
+		);
+
+		return newUser;
+	}
+
+	private async applyOidcRoleMapping(user: User, claims: Record<string, unknown>): Promise<void> {
+		const oidcConfig = this.globalConfig.sso.oidc;
+		if (!oidcConfig.adminRole) {
+			return;
+		}
+
+		const roles = this.extractOidcRoles(claims);
+		if (roles.length === 0) {
+			return;
+		}
+
+		const isAdmin = roles.includes(oidcConfig.adminRole);
+
+		if (isAdmin && user.role.slug !== GLOBAL_ADMIN_ROLE.slug) {
+			await this.userRepository.update(user.id, { role: GLOBAL_ADMIN_ROLE });
+			user.role = GLOBAL_ADMIN_ROLE;
+		}
+	}
+
+	/**
+	 * Extract roles from OIDC claims.
+	 * Supports Keycloak-style resource_access.{clientId}.roles
+	 * and generic claim-based roles.
+	 */
+	private extractOidcRoles(claims: Record<string, unknown>): string[] {
+		const oidcConfig = this.globalConfig.sso.oidc;
+
+		// 1. Try Keycloak-style resource_access.{clientId}.roles
+		if (oidcConfig.clientId) {
+			const resourceAccess = claims.resource_access as
+				| Record<string, { roles?: string[] }>
+				| undefined;
+			if (resourceAccess?.[oidcConfig.clientId]?.roles) {
+				return resourceAccess[oidcConfig.clientId].roles!;
+			}
+		}
+
+		// 2. Try generic role claim
+		if (oidcConfig.roleClaim) {
+			const roleValue = claims[oidcConfig.roleClaim];
+			if (Array.isArray(roleValue)) {
+				return roleValue.map(String);
+			}
+			if (typeof roleValue === 'string') {
+				return [roleValue];
+			}
+		}
+
+		return [];
+	}
+
 	/** Validate invite token to enable invitee to set up their account */
 	@Get('/resolve-signup-token', { skipAuth: true })
 	async resolveSignupToken(
@@ -226,7 +528,6 @@ export class AuthController {
 		);
 
 		const isWithinUsersLimit = this.license.isWithinUsersLimit();
-
 		if (!isWithinUsersLimit) {
 			this.logger.debug('Request to resolve signup token failed because of users quota reached', {
 				inviterId,

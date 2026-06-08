@@ -272,8 +272,8 @@ export class FrontendService {
 				},
 				oidc: {
 					loginEnabled: false,
-					loginUrl: `${instanceBaseUrl}/${restEndpoint}/sso/oidc/login`,
-					callbackUrl: `${instanceBaseUrl}/${restEndpoint}/sso/oidc/callback`,
+					loginUrl: `${instanceBaseUrl}/${restEndpoint}/login/oidc`,
+					callbackUrl: `${instanceBaseUrl}/${restEndpoint}/login/oidc/callback`,
 				},
 			},
 			logStreaming: {
@@ -524,7 +524,12 @@ export class FrontendService {
 			});
 		}
 
-		if (this.licenseState.isOidcLicensed()) {
+		// Expose OIDC config for community edition when env vars are configured
+		const oidcConfig = this.globalConfig.sso.oidc;
+		const isOidcConfigured =
+			oidcConfig.loginEnabled &&
+			Boolean(oidcConfig.issuerUrl && oidcConfig.clientId && oidcConfig.clientSecret);
+		if (isOidcConfigured || this.licenseState.isOidcLicensed()) {
 			Object.assign(this.settings.sso.oidc, {
 				loginEnabled: this.globalConfig.sso.oidc.loginEnabled,
 			});
