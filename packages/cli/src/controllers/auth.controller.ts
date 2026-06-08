@@ -275,83 +275,134 @@ export class AuthController {
 	/** Handle OIDC callback for community edition SSO */
 	@Get('/login/oidc/callback', { skipAuth: true })
 	async oidcCallback(req: AuthlessRequest, res: Response) {
-		const oidcConfig = this.globalConfig.sso.oidc;
-		const fullUrl = `${this.urlService.getInstanceBaseUrl()}${req.originalUrl}`;
-		const callbackUrl = new URL(fullUrl);
-
-		const state = req.cookies[OIDC_STATE_COOKIE_NAME];
-		if (typeof state !== 'string') {
-			this.logger.error('State is missing');
-			throw new BadRequestError('Invalid state');
-		}
-
-		const nonce = req.cookies[OIDC_NONCE_COOKIE_NAME];
-		if (typeof nonce !== 'string') {
-			this.logger.error('Nonce is missing');
-			throw new BadRequestError('Invalid nonce');
-		}
-
-		const { expectedState } = this.verifyOidcState(state);
-		const expectedNonce = this.verifyOidcNonce(nonce);
-
-		res.clearCookie(OIDC_STATE_COOKIE_NAME);
-		res.clearCookie(OIDC_NONCE_COOKIE_NAME);
-
-		const openidClient = await import('openid-client');
-		const issuerUrl = new URL(oidcConfig.issuerUrl);
-		const configuration = await openidClient.discovery(issuerUrl, oidcConfig.clientId, {
-			client_secret: oidcConfig.clientSecret,
-		});
-
-		let tokens;
 		try {
-			tokens = await openidClient.authorizationCodeGrant(configuration, callbackUrl, {
-				expectedState,
-				expectedNonce,
+			const oidcConfig = this.globalConfig.sso.oidc;
+			const fullUrl = `${this.urlService.getInstanceBaseUrl()}${req.originalUrl}`;
+			const callbackUrl = new URL(fullUrl);
+
+			const state = req.cookies[OIDC_STATE_COOKIE_NAME];
+			if (typeof state !== 'string') {
+				this.logger.error('State is missing');
+				return res.status(400).json({ status: 'error', message: 'Invalid state' });
+			}
+
+			const nonce = req.cookies[OIDC_NONCE_COOKIE_NAME];
+			if (typeof nonce !== 'string') {
+				this.logger.error('Nonce is missing');
+				return res.status(400).json({ status: 'error', message: 'Invalid nonce' });
+			}
+
+			let expectedState: string;
+			let expectedNonce: string;
+			try {
+				const stateResult = this.verifyOidcState(state);
+				expectedState = stateResult.expectedState;
+				expectedNonce = this.verifyOidcNonce(nonce);
+			} catch {
+				return res.status(400).json({ status: 'error', message: 'Invalid state or nonce' });
+			}
+
+			res.clearCookie(OIDC_STATE_COOKIE_NAME);
+			res.clearCookie(OIDC_NONCE_COOKIE_NAME);
+
+			// Extract code from callback URL
+			const code = callbackUrl.searchParams.get('code');
+			if (!code) {
+				return res.status(400).json({ status: 'error', message: 'Missing authorization code' });
+			}
+
+			// Verify state matches
+			const returnedState = callbackUrl.searchParams.get('state');
+			if (returnedState !== expectedState) {
+				return res.status(400).json({ status: 'error', message: 'Invalid state' });
+			}
+
+			// Exchange code for tokens manually using client_secret_post
+			const tokenEndpoint = `${oidcConfig.issuerUrl}/protocol/openid-connect/token`;
+			const redirectUri =
+				oidcConfig.redirectUri ||
+				`${this.urlService.getInstanceBaseUrl()}/${this.globalConfig.endpoints.rest}/login/oidc/callback`;
+
+			const tokenResponse = await fetch(tokenEndpoint, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({
+					grant_type: 'authorization_code',
+					client_id: oidcConfig.clientId,
+					client_secret: oidcConfig.clientSecret,
+					code,
+					redirect_uri: redirectUri,
+				}),
 			});
+
+			if (!tokenResponse.ok) {
+				const errorBody = await tokenResponse.text();
+				this.logger.error('Token exchange failed', {
+					status: tokenResponse.status,
+					body: errorBody,
+				});
+				return res
+					.status(400)
+					.json({ status: 'error', message: 'Failed to exchange authorization code' });
+			}
+
+			const tokenData = await tokenResponse.json();
+
+			// Parse JWT id_token
+			let claims: Record<string, unknown>;
+			try {
+				const idToken = tokenData.id_token as string;
+				const [, payloadB64] = idToken.split('.');
+				const payloadJson = Buffer.from(payloadB64, 'base64url').toString('utf8');
+				claims = JSON.parse(payloadJson);
+			} catch (error) {
+				this.logger.error('Failed to parse id_token', { error });
+				return res.status(400).json({ status: 'error', message: 'Invalid token' });
+			}
+
+			// Verify nonce
+			if (claims.nonce !== expectedNonce) {
+				return res.status(400).json({ status: 'error', message: 'Invalid nonce' });
+			}
+
+			if (!claims.sub) {
+				return res
+					.status(403)
+					.json({ status: 'error', message: 'No subject found in the OIDC token' });
+			}
+
+			// Build userInfo from id_token claims
+			const userInfo = {
+				email: claims.email as string | undefined,
+				given_name: claims.given_name as string | undefined,
+				family_name: claims.family_name as string | undefined,
+				name: claims.name as string | undefined,
+			};
+
+			if (!userInfo.email) {
+				return res.status(400).json({ status: 'error', message: 'An email is required' });
+			}
+
+			if (!isValidEmail(userInfo.email)) {
+				return res.status(400).json({ status: 'error', message: 'Invalid email format' });
+			}
+
+			const user = await this.findOrCreateOidcUser(claims.sub as string, userInfo);
+			await this.applyOidcRoleMapping(user, claims);
+
+			this.authService.issueCookie(res, user, true, req.browserId);
+			this.eventService.emit('user-logged-in', {
+				user,
+				authenticationMethod: 'oidc',
+			});
+
+			return res.redirect('/');
 		} catch (error) {
-			this.logger.error('Failed to exchange authorization code for tokens', { error });
-			throw new BadRequestError('Invalid authorization code');
+			this.logger.error('OIDC callback failed', { error });
+			if (!res.headersSent) {
+				return res.status(500).json({ status: 'error', message: 'Internal server error' });
+			}
 		}
-
-		let claims;
-		try {
-			claims = tokens.claims();
-		} catch (error) {
-			this.logger.error('Failed to extract claims from tokens', { error });
-			throw new BadRequestError('Invalid token');
-		}
-
-		if (!claims) {
-			throw new ForbiddenError('No claims found in the OIDC token');
-		}
-
-		let userInfo;
-		try {
-			userInfo = await openidClient.fetchUserInfo(configuration, tokens.access_token, claims.sub);
-		} catch (error) {
-			this.logger.error('Failed to fetch user info', { error });
-			throw new BadRequestError('Invalid token');
-		}
-
-		if (!userInfo.email) {
-			throw new BadRequestError('An email is required');
-		}
-
-		if (!isValidEmail(userInfo.email)) {
-			throw new BadRequestError('Invalid email format');
-		}
-
-		const user = await this.findOrCreateOidcUser(claims.sub, userInfo);
-		await this.applyOidcRoleMapping(user, claims);
-
-		this.authService.issueCookie(res, user, true, req.browserId);
-		this.eventService.emit('user-logged-in', {
-			user,
-			authenticationMethod: 'oidc',
-		});
-
-		return res.redirect('/');
 	}
 
 	private generateOidcState() {
