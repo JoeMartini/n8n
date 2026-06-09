@@ -263,15 +263,15 @@ export class FrontendService {
 			sso: {
 				managedByEnv: this.globalConfig.instanceSettingsLoader.ssoManagedByEnv,
 				saml: {
-					loginEnabled: false,
-					loginLabel: '',
+					loginEnabled: this.globalConfig.sso.saml.loginEnabled,
+					loginLabel: this.globalConfig.sso.saml.loginLabel,
 				},
 				ldap: {
-					loginEnabled: false,
-					loginLabel: '',
+					loginEnabled: this.globalConfig.sso.ldap.loginEnabled,
+					loginLabel: this.globalConfig.sso.ldap.loginLabel,
 				},
 				oidc: {
-					loginEnabled: false,
+					loginEnabled: this.globalConfig.sso.oidc.loginEnabled,
 					loginUrl: `${instanceBaseUrl}/${restEndpoint}/login/oidc`,
 					callbackUrl: `${instanceBaseUrl}/${restEndpoint}/login/oidc/callback`,
 				},

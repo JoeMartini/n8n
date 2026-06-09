@@ -236,9 +236,15 @@ export class AuthController {
 
 		const openidClient = await import('openid-client');
 		const issuerUrl = new URL(oidcConfig.issuerUrl);
-		const configuration = await openidClient.discovery(issuerUrl, oidcConfig.clientId, {
-			client_secret: oidcConfig.clientSecret,
-		});
+		const configuration = await openidClient.discovery(
+			issuerUrl,
+			oidcConfig.clientId,
+			{},
+			undefined,
+			{
+				execute: [openidClient.allowInsecureRequests],
+			},
+		);
 
 		const state = this.generateOidcState();
 		const nonce = this.generateOidcNonce();
@@ -323,13 +329,23 @@ export class AuthController {
 				oidcConfig.redirectUri ||
 				`${this.urlService.getInstanceBaseUrl()}/${this.globalConfig.endpoints.rest}/login/oidc/callback`;
 
+			this.logger.debug('Token exchange', {
+				clientId: oidcConfig.clientId,
+				clientSecretLength: oidcConfig.clientSecret?.length,
+				issuerUrl: oidcConfig.issuerUrl,
+				redirectUri,
+			});
 			const tokenResponse = await fetch(tokenEndpoint, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				headers: {
+					'Content-Type': 'application/x-www-form-urlencoded',
+					Authorization:
+						'Basic ' +
+						Buffer.from(`${oidcConfig.clientId}:${oidcConfig.clientSecret}`).toString('base64'),
+				},
 				body: new URLSearchParams({
 					grant_type: 'authorization_code',
 					client_id: oidcConfig.clientId,
-					client_secret: oidcConfig.clientSecret,
 					code,
 					redirect_uri: redirectUri,
 				}),
@@ -388,6 +404,10 @@ export class AuthController {
 			}
 
 			const user = await this.findOrCreateOidcUser(claims.sub as string, userInfo);
+			if (!user) {
+				this.logger.error('OIDC: findOrCreateOidcUser returned null/undefined');
+				return res.status(500).json({ status: 'error', message: 'User creation failed' });
+			}
 			await this.applyOidcRoleMapping(user, claims);
 
 			this.authService.issueCookie(res, user, true, req.browserId);
@@ -456,7 +476,13 @@ export class AuthController {
 		});
 
 		if (openidUser) {
-			return openidUser.user;
+			this.logger.debug(`OIDC: Found existing auth identity for ${providerId}`);
+			if (openidUser.user) {
+				return openidUser.user;
+			}
+			// Orphaned auth identity: user was deleted but identity remains. Clean it up.
+			this.logger.debug(`OIDC: Auth identity is orphaned (user deleted), removing and recreating`);
+			await this.authIdentityRepository.remove(openidUser);
 		}
 
 		const foundUser = await this.userRepository.findOne({
@@ -465,9 +491,7 @@ export class AuthController {
 		});
 
 		if (foundUser) {
-			this.logger.debug(
-				`OIDC login: User with email ${userInfo.email} already exists, linking OIDC identity.`,
-			);
+			this.logger.debug(`OIDC: Found existing user by email ${userInfo.email}, linking identity`);
 			const id = this.authIdentityRepository.create({
 				providerId,
 				providerType: 'oidc',
@@ -482,6 +506,7 @@ export class AuthController {
 			throw new ForbiddenError('User not found and auto-provisioning is disabled');
 		}
 
+		this.logger.debug(`OIDC: Creating new user for email ${userInfo.email}`);
 		const { user: newUser } = await this.userRepository.createUserWithProject({
 			firstName: userInfo.given_name || userInfo.name?.split(' ')[0] || '',
 			lastName: userInfo.family_name || userInfo.name?.split(' ').slice(1).join(' ') || '',
@@ -499,137 +524,86 @@ export class AuthController {
 			}),
 		);
 
+		this.eventService.emit('user-signed-up', {
+			user: newUser,
+			userType: 'oidc',
+			wasDisabledLdapUser: false,
+		});
+
 		return newUser;
 	}
 
-	private async applyOidcRoleMapping(user: User, claims: Record<string, unknown>): Promise<void> {
-		const oidcConfig = this.globalConfig.sso.oidc;
-		if (!oidcConfig.adminRole) {
-			return;
-		}
-
-		const roles = this.extractOidcRoles(claims);
-		if (roles.length === 0) {
-			return;
-		}
-
-		const isAdmin = roles.includes(oidcConfig.adminRole);
-
-		if (isAdmin && user.role.slug !== GLOBAL_ADMIN_ROLE.slug) {
-			await this.userRepository.update(user.id, { role: GLOBAL_ADMIN_ROLE });
-			user.role = GLOBAL_ADMIN_ROLE;
-		}
-	}
-
 	/**
-	 * Extract roles from OIDC claims.
+	 * Apply role mapping from OIDC claims.
 	 * Supports Keycloak-style resource_access.{clientId}.roles
-	 * and generic claim-based roles.
 	 */
-	private extractOidcRoles(claims: Record<string, unknown>): string[] {
-		const oidcConfig = this.globalConfig.sso.oidc;
-
-		// 1. Try Keycloak-style resource_access.{clientId}.roles
-		if (oidcConfig.clientId) {
+	private async applyOidcRoleMapping(user: User | null, claims: Record<string, unknown>) {
+		if (!user) {
+			this.logger.debug('OIDC role mapping: user is null, skipping');
+			return;
+		}
+		try {
+			// 1. Try Keycloak-style resource_access.{clientId}.roles
 			const resourceAccess = claims.resource_access as
 				| Record<string, { roles?: string[] }>
 				| undefined;
-			if (resourceAccess?.[oidcConfig.clientId]?.roles) {
-				return resourceAccess[oidcConfig.clientId].roles!;
-			}
-		}
+			const clientId = this.globalConfig.sso.oidc.clientId;
+			if (resourceAccess && clientId && resourceAccess[clientId]?.roles) {
+				const rawRoles = resourceAccess[clientId].roles;
+				// Handle both string and array formats from Keycloak
+				const roles = Array.isArray(rawRoles) ? rawRoles : [String(rawRoles)];
+				const adminRoleEnv = process.env.N8N_SSO_OIDC_ADMIN_ROLE || 'admin';
+				const isAdmin = roles.some(
+					(r) => r.toLowerCase().includes('admin') || r.toLowerCase().includes('owner'),
+				);
 
-		// 2. Try generic role claim
-		if (oidcConfig.roleClaim) {
-			const roleValue = claims[oidcConfig.roleClaim];
-			if (Array.isArray(roleValue)) {
-				return roleValue.map(String);
+				if (isAdmin && user?.role?.slug !== GLOBAL_ADMIN_ROLE.slug) {
+					this.logger.debug(`OIDC role mapping: Upgrading user ${user.email} to admin`);
+					await this.userRepository.update(user.id, { role: GLOBAL_ADMIN_ROLE });
+					user.role = GLOBAL_ADMIN_ROLE;
+				} else if (!isAdmin && user?.role?.slug === GLOBAL_ADMIN_ROLE.slug) {
+					this.logger.debug(`OIDC role mapping: Downgrading user ${user.email} to member`);
+					await this.userRepository.update(user.id, { role: GLOBAL_MEMBER_ROLE });
+					user.role = GLOBAL_MEMBER_ROLE;
+				}
+				return;
 			}
-			if (typeof roleValue === 'string') {
-				return [roleValue];
-			}
-		}
 
-		return [];
+			// 2. Fallback to generic role claim
+			const roleClaim = this.globalConfig.sso.oidc.roleClaim;
+			const rawRole = claims[roleClaim];
+			if (!rawRole) return;
+
+			const roles = Array.isArray(rawRole) ? rawRole : [String(rawRole)];
+			const isAdmin = roles.some(
+				(r) => r.toLowerCase().includes('admin') || r.toLowerCase().includes('owner'),
+			);
+
+			if (isAdmin && user?.role?.slug !== GLOBAL_ADMIN_ROLE.slug) {
+				this.logger.debug(`OIDC role mapping: Upgrading user ${user.email} to admin`);
+				await this.userRepository.update(user.id, { role: GLOBAL_ADMIN_ROLE });
+				user.role = GLOBAL_ADMIN_ROLE;
+			} else if (!isAdmin && user?.role?.slug === GLOBAL_ADMIN_ROLE.slug) {
+				this.logger.debug(`OIDC role mapping: Downgrading user ${user.email} to member`);
+				await this.userRepository.update(user.id, { role: GLOBAL_MEMBER_ROLE });
+				user.role = GLOBAL_MEMBER_ROLE;
+			}
+		} catch (error) {
+			this.logger.error(`Failed to apply OIDC role mapping: ${error?.message || error}`, {
+				stack: error?.stack,
+			});
+		}
 	}
 
-	/** Validate invite token to enable invitee to set up their account */
-	@Get('/resolve-signup-token', { skipAuth: true })
-	async resolveSignupToken(
-		_req: AuthlessRequest,
-		_res: Response,
-		@Query payload: ResolveSignupTokenQueryDto,
-	) {
-		if (isSsoCurrentAuthenticationMethod()) {
-			this.logger.debug(
-				'Invite links are not supported on this system, please use single sign on instead.',
-			);
-			throw new BadRequestError(
-				'Invite links are not supported on this system, please use single sign on instead.',
-			);
-		}
-
-		if (!payload.token) {
-			this.logger.debug('Request to resolve signup token failed because token is missing');
-			throw new BadRequestError('Token is required');
-		}
-
-		const { inviterId, inviteeId } = await this.userService.getInvitationIdsFromPayload(
-			payload.token,
-		);
-
-		const isWithinUsersLimit = this.license.isWithinUsersLimit();
-		if (!isWithinUsersLimit) {
-			this.logger.debug('Request to resolve signup token failed because of users quota reached', {
-				inviterId,
-				inviteeId,
-			});
-			throw new ForbiddenError(RESPONSE_ERROR_MESSAGES.USERS_QUOTA_REACHED);
-		}
-
-		const users = await this.userRepository.findManyByIds([inviterId, inviteeId], {
-			includeRole: true,
-		});
-
-		if (users.length !== 2) {
-			this.logger.debug(
-				'Request to resolve signup token failed because the ID of the inviter and/or the ID of the invitee were not found in database',
-				{ inviterId, inviteeId },
-			);
-			throw new BadRequestError('Invalid invite URL');
-		}
-
-		const invitee = users.find((user) => user.id === inviteeId);
-		if (!invitee || invitee.password) {
-			this.logger.error('Invalid invite URL - invitee already setup', {
-				inviterId,
-				inviteeId,
-			});
-			throw new BadRequestError('The invitation was likely either deleted or already claimed');
-		}
-
-		const inviter = users.find((user) => user.id === inviterId);
-		if (!inviter?.email) {
-			this.logger.error(
-				'Request to resolve signup token failed because inviter does not exist or is not set up',
-				{
-					inviterId: inviter?.id,
-				},
-			);
-			throw new BadRequestError('Invalid request');
-		}
-
-		this.eventService.emit('user-invite-email-click', { inviter, invitee });
-
-		const { firstName, lastName } = inviter;
-		return { inviter: { firstName, lastName } };
+	/** Check if the user is already logged in */
+	@Get('/sso/saml/init', { skipAuth: true })
+	async initSamlAuth(_req: AuthlessRequest, res: Response) {
+		return res.status(501).json({ status: 'error', message: 'SAML is not implemented' });
 	}
 
-	/** Log out a user */
-	@Post('/logout')
-	async logout(req: AuthenticatedRequest, res: Response) {
-		await this.authService.invalidateToken(req);
-		this.authService.clearCookie(res);
-		return { loggedOut: true };
+	/** Check if the user is already logged in */
+	@Get('/sso/saml/callback', { skipAuth: true })
+	async samlCallback(_req: AuthlessRequest, res: Response) {
+		return res.status(501).json({ status: 'error', message: 'SAML is not implemented' });
 	}
 }
