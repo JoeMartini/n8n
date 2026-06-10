@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import { computed } from 'vue';
 import { useSSOStore } from '../sso.store';
 import { useI18n } from '@n8n/i18n';
 import { useToast } from '@/app/composables/useToast';
@@ -9,6 +10,9 @@ const i18n = useI18n();
 const ssoStore = useSSOStore();
 const toast = useToast();
 const route = useRoute();
+
+// Full OIDC mode: no local login form above, hide divider
+const isFullMode = computed(() => ssoStore.isCommunityOidcEnabled);
 
 const onSSOLogin = async () => {
 	try {
@@ -29,15 +33,11 @@ const onSSOLogin = async () => {
 		v-if="ssoStore.showSsoLoginButton || ssoStore.isCommunityOidcEnabled"
 		:class="$style.ssoLogin"
 	>
-		<div :class="$style.divider">
+		<!-- Divider only shown in hybrid mode (local login form exists above) -->
+		<div v-if="!isFullMode" :class="$style.divider">
 			<span>{{ i18n.baseText('sso.login.divider') }}</span>
 		</div>
-		<N8nButton
-			variant="outline"
-			size="large"
-			:label="i18n.baseText('sso.login.button')"
-			@click="onSSOLogin"
-		/>
+		<N8nButton variant="outline" size="large" label="🔐 统一身份登录" @click="onSSOLogin" />
 	</div>
 </template>
 

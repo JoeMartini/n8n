@@ -17,6 +17,9 @@ import type { IFormBoxConfig } from '@/Interface';
 import { MFA_AUTHENTICATION_REQUIRED_ERROR_CODE, VIEWS, MFA_FORM } from '@/app/constants';
 import type { LoginRequestDto } from '@n8n/api-types';
 
+import { N8nLogo } from '@n8n/design-system';
+import SSOLogin from '@/features/settings/sso/components/SSOLogin.vue';
+
 export type EmailOrLdapLoginIdAndPassword = Pick<
 	LoginRequestDto,
 	'emailOrLdapLoginId' | 'password'
@@ -40,6 +43,9 @@ const showMfaView = ref(false);
 const emailOrLdapLoginId = ref('');
 const password = ref('');
 const reportError = ref(false);
+
+// Community OIDC full mode: hide local login when OIDC is the only auth method
+const isCommunityOidcFullMode = computed(() => ssoStore.isCommunityOidcEnabled);
 
 const ldapLoginLabel = computed(() => ssoStore.ldapLoginLabel);
 const isLdapLoginEnabled = computed(() => ssoStore.isLdapLoginEnabled);
@@ -200,8 +206,15 @@ const cacheCredentials = (form: EmailOrLdapLoginIdAndPassword) => {
 
 <template>
 	<div>
+		<!-- Community OIDC Full Mode: SSO only, no local login -->
+		<div v-if="!showMfaView && isCommunityOidcFullMode" :class="$style.ssoOnlyContainer">
+			<N8nLogo size="large" :release-channel="settingsStore.settings.releaseChannel" />
+			<div :class="$style.ssoOnlyBox">
+				<SSOLogin />
+			</div>
+		</div>
 		<AuthView
-			v-if="!showMfaView"
+			v-else-if="!showMfaView"
 			:form="formConfig"
 			:form-loading="loading"
 			:with-sso="true"
@@ -217,3 +230,21 @@ const cacheCredentials = (form: EmailOrLdapLoginIdAndPassword) => {
 		/>
 	</div>
 </template>
+
+<style lang="scss" module>
+.ssoOnlyContainer {
+	display: flex;
+	align-items: center;
+	flex-direction: column;
+	padding-top: var(--spacing--2xl);
+
+	> * {
+		width: 352px;
+	}
+}
+
+.ssoOnlyBox {
+	padding-bottom: var(--spacing--xl);
+	margin-top: var(--spacing--xl);
+}
+</style>
