@@ -85,3 +85,7 @@ IMPROVEMENTS.md
 .playwright-mcp
 stryker.log
 .env.dev
+
+# Local production env files (contain domain secrets)
+.env.prod
+start-n8n-prod.sh
