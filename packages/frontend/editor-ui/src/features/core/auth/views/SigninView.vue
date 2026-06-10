@@ -17,9 +17,6 @@ import type { IFormBoxConfig } from '@/Interface';
 import { MFA_AUTHENTICATION_REQUIRED_ERROR_CODE, VIEWS, MFA_FORM } from '@/app/constants';
 import type { LoginRequestDto } from '@n8n/api-types';
 
-import { N8nLogo } from '@n8n/design-system';
-import SSOLogin from '@/features/settings/sso/components/SSOLogin.vue';
-
 export type EmailOrLdapLoginIdAndPassword = Pick<
 	LoginRequestDto,
 	'emailOrLdapLoginId' | 'password'
@@ -91,6 +88,15 @@ const formConfig: IFormBoxConfig = reactive({
 		},
 	],
 });
+
+// Empty form config for OIDC full mode: keeps the card shell, hides inputs/buttons/links
+const ssoOnlyFormConfig: IFormBoxConfig = {
+	title: '',
+	buttonText: '',
+	redirectText: '',
+	redirectLink: '',
+	inputs: [],
+};
 
 const onMFASubmitted = async (form: MfaCodeOrMfaRecoveryCode) => {
 	await login({
@@ -206,16 +212,9 @@ const cacheCredentials = (form: EmailOrLdapLoginIdAndPassword) => {
 
 <template>
 	<div>
-		<!-- Community OIDC Full Mode: SSO only, no local login -->
-		<div v-if="!showMfaView && isCommunityOidcFullMode" :class="$style.ssoOnlyContainer">
-			<N8nLogo size="large" :release-channel="settingsStore.settings.releaseChannel" />
-			<div :class="$style.ssoOnlyBox">
-				<SSOLogin />
-			</div>
-		</div>
 		<AuthView
-			v-else-if="!showMfaView"
-			:form="formConfig"
+			v-if="!showMfaView"
+			:form="isCommunityOidcFullMode ? ssoOnlyFormConfig : formConfig"
 			:form-loading="loading"
 			:with-sso="true"
 			data-test-id="signin-form"
@@ -230,21 +229,3 @@ const cacheCredentials = (form: EmailOrLdapLoginIdAndPassword) => {
 		/>
 	</div>
 </template>
-
-<style lang="scss" module>
-.ssoOnlyContainer {
-	display: flex;
-	align-items: center;
-	flex-direction: column;
-	padding-top: var(--spacing--2xl);
-
-	> * {
-		width: 352px;
-	}
-}
-
-.ssoOnlyBox {
-	padding-bottom: var(--spacing--xl);
-	margin-top: var(--spacing--xl);
-}
-</style>
