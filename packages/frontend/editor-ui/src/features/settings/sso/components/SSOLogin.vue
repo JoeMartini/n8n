@@ -31,13 +31,19 @@ const onSSOLogin = async () => {
 <template>
 	<div
 		v-if="ssoStore.showSsoLoginButton || ssoStore.isCommunityOidcEnabled"
-		:class="$style.ssoLogin"
+		:class="[$style.ssoLogin, isFullMode && $style.ssoLoginFull]"
 	>
 		<!-- Divider only shown in hybrid mode (local login form exists above) -->
 		<div v-if="!isFullMode" :class="$style.divider">
 			<span>{{ i18n.baseText('sso.login.divider') }}</span>
 		</div>
-		<N8nButton variant="outline" size="large" label="🔐 统一身份登录" @click="onSSOLogin" />
+		<N8nButton
+			variant="outline"
+			size="large"
+			label="🔐 统一身份登录"
+			:class="$style.ssoButton"
+			@click="onSSOLogin"
+		/>
 	</div>
 </template>
 
@@ -48,6 +54,17 @@ const onSSOLogin = async () => {
 	justify-content: center;
 	align-items: center;
 	text-align: center;
+}
+
+.ssoLoginFull {
+	width: 100%;
+	min-height: 120px;
+	padding: var(--spacing--xl) 0;
+}
+
+.ssoButton {
+	width: 100%;
+	max-width: 320px;
 }
 
 .divider {
