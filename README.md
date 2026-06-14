@@ -2,6 +2,8 @@
 
 # n8n - Secure Workflow Automation for Technical Teams
 
+> 🍴 **This fork adds Community OIDC SSO integration** — authenticate users via Keycloak (or any OIDC provider) without requiring an Enterprise license. See [OIDC Integration](#oidc-integration) below.
+
 n8n is a workflow automation platform that gives technical teams the flexibility of code with the speed of no-code. With 400+ integrations, native AI capabilities, and a fair-code license, n8n lets you build powerful automations while maintaining full control over your data and deployments.
 
 ![n8n.io - Screenshot](https://raw.githubusercontent.com/n8n-io/n8n/master/assets/n8n-screenshot-readme.png)
@@ -70,3 +72,46 @@ Want to shape the future of automation? Check out our [job posts](https://n8n.io
 **Short answer:** It means "nodemation" and is pronounced as n-eight-n.
 
 **Long answer:** "I get that question quite often (more often than I expected) so I decided it is probably best to answer it here. While looking for a good name for the project with a free domain I realized very quickly that all the good ones I could think of were already taken. So, in the end, I chose nodemation. 'node-' in the sense that it uses a Node-View and that it uses Node.js and '-mation' for 'automation' which is what the project is supposed to help with. However, I did not like how long the name was and I could not imagine writing something that long every time in the CLI. That is when I then ended up on 'n8n'." - **Jan Oberhauser, Founder and CEO, n8n.io**
+
+---
+
+## OIDC Integration
+
+This fork (`community-oidc`) adds **OIDC Single Sign-On for the Community Edition**, removing the Enterprise license requirement.
+
+### What was changed
+
+- **Frontend** (`packages/editor-ui/src/views/SigninView.vue`):
+  - Introduced `oidc_full` mode: hides username/password inputs entirely, showing only a single SSO login button
+  - Added `oidc` mixed mode: keeps local login as fallback while adding SSO option
+  - Unified SSO button label to "🔐 统一身份登录" with consistent styling
+
+- **SSO Component** (`packages/editor-ui/src/components/SSOLogin.vue`):
+  - Enhanced to support external OIDC providers via the existing generic OAuth2 framework
+  - Properly handles `redirect_uri` and `state` parameters for secure callback flow
+
+- **Backend** (`packages/cli/src/commands/oauth/oauth2-credential.controller.ts`):
+  - Exposes frontend-configurable OIDC settings via existing endpoints
+  - Role mapping from Keycloak `groups` claim to n8n user roles
+
+### How to use
+
+1. Build n8n from this branch
+2. Set environment variables:
+   - `N8N_SSO_OIDC_CLIENT_ID`
+   - `N8N_SSO_OIDC_CLIENT_SECRET`
+   - `N8N_SSO_OIDC_ISSUER_URI` (e.g., `https://auth.example.com/realms/myrealm`)
+   - `N8N_SSO_OIDC_REDIRECT_URI` (e.g., `https://n8n.example.com/rest/oauth2-credential/callback`)
+3. Choose mode via `N8N_SSO_OIDC_MODE=oidc_full` or `oidc`
+4. Start n8n and users will see the SSO login button
+
+### Branches in this fork
+
+| Branch | Purpose |
+|--------|---------|
+| `master` | Tracks upstream n8n master |
+| `community-oidc` | Community OIDC SSO integration |
+
+### Author
+
+Maintained by [Hermes-Martini-Home](https://github.com/JoeMartini) · [Upstream sync record](https://app.notion.com/p/37fc7ae4e85381f890e0f65a70cc8b29)
