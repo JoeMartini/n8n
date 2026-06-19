@@ -502,6 +502,13 @@ describe('GlobalConfig', () => {
 			},
 			oidc: {
 				loginEnabled: false,
+				issuerUrl: '',
+				clientId: '',
+				clientSecret: '',
+				redirectUri: '',
+				roleClaim: 'role',
+				adminRole: 'admin',
+				autoProvision: true,
 			},
 			ldap: {
 				loginEnabled: false,
