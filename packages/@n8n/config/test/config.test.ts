@@ -487,6 +487,9 @@ describe('GlobalConfig', () => {
 		aiBuilder: {
 			apiKey: '',
 		},
+		collaboration: {
+			crdt: 'off',
+		},
 		tags: {
 			disabled: false,
 		},
@@ -533,6 +536,7 @@ describe('GlobalConfig', () => {
 		httpRequest: {
 			enforceGlobalUserAgent: false,
 			globalUserAgentValue: '',
+			responseBodyReadTimeout: 300000,
 		},
 		redis: {
 			prefix: 'n8n',
@@ -684,6 +688,7 @@ describe('GlobalConfig', () => {
 			httpRequest: {
 				enforceGlobalUserAgent: true,
 				globalUserAgentValue: 'AcmeCorp/1.0',
+				responseBodyReadTimeout: 300000,
 			},
 		});
 		expect(readFileSyncMock).not.toHaveBeenCalled();
