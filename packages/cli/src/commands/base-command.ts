@@ -3,6 +3,7 @@ import {
 	inDevelopment,
 	inTest,
 	LicenseState,
+	LockService,
 	Logger,
 	ModuleRegistry,
 	ModulesConfig,
@@ -22,27 +23,28 @@ import {
 } from 'n8n-core';
 import { ObjectStoreConfig } from 'n8n-core/dist/binary-data/object-store/object-store.config';
 import { AzureBlobConfig } from 'n8n-core/dist/binary-data/azure-blob/azure-blob.config';
-import { ensureError, Expression, sleep, UnexpectedError } from 'n8n-workflow';
+import { ensureError } from '@n8n/utils/errors/ensure-error';
+import { Expression, sleep, UnexpectedError } from 'n8n-workflow';
 
 import type { AbstractServer } from '@/abstract-server';
 import { N8N_VERSION, N8N_RELEASE_DATE } from '@/constants';
 import * as CrashJournal from '@/crash-journal';
 import { getDataDeduplicationService } from '@/deduplication';
-import { ExecutionPersistence } from '@/executions/execution-persistence';
 import { TestRunCleanupService } from '@/evaluation.ee/test-runner/test-run-cleanup.service.ee';
 import { MessageEventBus } from '@/eventbus/message-event-bus/message-event-bus';
 import { TelemetryEventRelay } from '@/events/relays/telemetry.event-relay';
 import { WorkflowFailureNotificationEventRelay } from '@/events/relays/workflow-failure-notification.event-relay';
+import { ExecutionDataJsonStore } from '@/executions/execution-data/execution-data-json-store';
 import { ExpressionObservabilityProvider } from '@/expression-observability/expression-observability.provider';
 import { ExternalHooks } from '@/external-hooks';
 import { License } from '@/license';
+import { LoadNodesAndCredentials } from '@/load-nodes-and-credentials';
 import { CommunityPackagesConfig } from '@/modules/community-packages/community-packages.config';
 import { NodeTypes } from '@/node-types';
 import { PostHogClient } from '@/posthog';
 import { ShutdownService } from '@/shutdown/shutdown.service';
 import { resolveBackendHealthEndpointPath } from '@/utils/health-endpoint.util';
 import { WorkflowHistoryManager } from '@/workflows/workflow-history/workflow-history-manager';
-import { LoadNodesAndCredentials } from '@/load-nodes-and-credentials';
 
 export abstract class BaseCommand<F = never> {
 	readonly flags: F;
@@ -96,6 +98,7 @@ export abstract class BaseCommand<F = never> {
 			profilesSampleRate,
 			tracesSampleRate,
 			tracesSlowSpanThresholdMs,
+			webhookTracesSampleRate,
 			eventLoopBlockThreshold,
 			eventLoopBlockMaxEventsPerHour,
 			eventLoopBlockDetectionEnabled,
@@ -112,6 +115,8 @@ export abstract class BaseCommand<F = never> {
 			eventLoopBlockMaxEventsPerHour,
 			tracesSampleRate,
 			slowSpanThresholdMs: tracesSlowSpanThresholdMs,
+			webhookEndpoint: this.globalConfig.endpoints.webhook,
+			webhookTracesSampleRate,
 			profilesSampleRate,
 			healthEndpoint: resolveBackendHealthEndpointPath(this.globalConfig),
 			eligibleIntegrations: {
@@ -130,6 +135,15 @@ export abstract class BaseCommand<F = never> {
 		this.nodeTypes = Container.get(NodeTypes);
 
 		await Container.get(LoadNodesAndCredentials).init();
+
+		const useRedisForLocking =
+			this.globalConfig.executions.mode === 'queue' ||
+			this.globalConfig.multiMainSetup.enabled ||
+			this.globalConfig.cache.backend === 'redis';
+		if (useRedisForLocking) {
+			const { RedisLockService } = await import('@/scaling/redis-lock.service');
+			Container.get(LockService).setProvider(Container.get(RedisLockService));
+		}
 
 		await this.dbConnection
 			.init()
@@ -364,8 +378,11 @@ export abstract class BaseCommand<F = never> {
 		const objectStoreService = Container.get(ObjectStoreService);
 		await objectStoreService.init();
 
-		const { S3Store } = await import('@/executions/execution-data/s3-store.ee');
-		Container.get(ExecutionPersistence).setS3Store(Container.get(S3Store));
+		const { S3ByteStore } = await import('@/blob-storage/s3-byte-store.ee');
+		Container.get(ExecutionDataJsonStore).registerByteStore(
+			's3',
+			new S3ByteStore(objectStoreService),
+		);
 
 		return objectStoreService;
 	}
@@ -379,8 +396,11 @@ export abstract class BaseCommand<F = never> {
 		const azureBlobService = Container.get(AzureBlobService);
 		await azureBlobService.init();
 
-		const { AzureStore } = await import('@/executions/execution-data/azure-store.ee');
-		Container.get(ExecutionPersistence).setAzStore(Container.get(AzureStore));
+		const { AzureByteStore } = await import('@/blob-storage/azure-byte-store.ee');
+		Container.get(ExecutionDataJsonStore).registerByteStore(
+			'az',
+			new AzureByteStore(azureBlobService),
+		);
 
 		return azureBlobService;
 	}

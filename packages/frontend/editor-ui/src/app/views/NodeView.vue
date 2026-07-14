@@ -45,6 +45,7 @@ import type {
 	CanvasNode,
 	CanvasNodeMoveEvent,
 	ConnectStartEvent,
+	GroupExpansionMode,
 	ViewportBoundaries,
 } from '@/features/workflows/canvas/canvas.types';
 import {
@@ -305,7 +306,15 @@ const isNDVV2 = computed(() => true);
 
 // Per-editor host overrides (AI features + read-only). The artifact host marks
 // the canvas read-only while a workflow-builder agent mutates the workflow.
-const { readOnly: externalReadOnly, expandGroups: externalExpandGroups } = useEditorContext();
+const {
+	readOnly: externalReadOnly,
+	expandGroups: externalExpandGroups,
+	executionButtonType,
+} = useEditorContext();
+
+const runWorkflowButtonType = computed(() =>
+	isDemoRoute.value ? 'secondary' : executionButtonType.value,
+);
 
 const isCanvasReadOnly = computed(() => {
 	return (
@@ -319,8 +328,8 @@ const isCanvasReadOnly = computed(() => {
 	);
 });
 
-const forceAllGroupsExpanded = computed(() => {
-	return isDemoRoute.value || externalExpandGroups.value;
+const groupExpansionMode = computed<GroupExpansionMode | undefined>(() => {
+	return isDemoRoute.value ? 'all' : externalExpandGroups.value;
 });
 
 const canExecuteOnCanvas = computed(() => {
@@ -1657,8 +1666,11 @@ function unregisterCustomActions() {
 
 function showAddFirstStepIfEnabled() {
 	if (uiStore.addFirstStepOnLoad) {
-		void onOpenNodeCreatorForTriggerNodes(NODE_CREATOR_OPEN_SOURCES.TRIGGER_PLACEHOLDER_BUTTON);
+		void onOpenNodeCreatorForTriggerNodes(
+			uiStore.addFirstStepOnLoadSource ?? NODE_CREATOR_OPEN_SOURCES.TRIGGER_PLACEHOLDER_BUTTON,
+		);
 		uiStore.addFirstStepOnLoad = false;
+		uiStore.addFirstStepOnLoadSource = undefined;
 	}
 }
 
@@ -1974,7 +1986,7 @@ onBeforeUnmount(() => {
 			:show-fallback-nodes="showFallbackNodes"
 			:event-bus="canvasEventBus"
 			:read-only="isCanvasReadOnly"
-			:force-all-groups-expanded="forceAllGroupsExpanded"
+			:group-expansion-mode="groupExpansionMode"
 			:can-execute="canExecuteOnCanvas"
 			:executing="isWorkflowRunning"
 			:key-bindings="keyBindingsEnabled"
@@ -1996,6 +2008,7 @@ onBeforeUnmount(() => {
 			@update:logs:input-open="logsStore.toggleInputOpen"
 			@update:logs:output-open="logsStore.toggleOutputOpen"
 			@update:has-range-selection="canvasStore.setHasRangeSelection"
+			@update:selected-group="canvasStore.setSelectedGroupId"
 			@open:sub-workflow="onOpenSubWorkflow"
 			@click:node="onClickNode"
 			@click:node:add="onClickNodeAdd"
@@ -2044,7 +2057,7 @@ onBeforeUnmount(() => {
 					:trigger-nodes="triggerNodes"
 					:get-node-type="nodeTypesStore.getNodeType"
 					:selected-trigger-node-name="workflowExecutionState.selectedTriggerNodeName"
-					:embedded="isDemoRoute"
+					:type="runWorkflowButtonType"
 					@mouseenter="onRunWorkflowButtonMouseEnter"
 					@mouseleave="onRunWorkflowButtonMouseLeave"
 					@execute="runEntireWorkflow('main')"

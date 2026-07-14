@@ -4,6 +4,8 @@ import type {
 	InstanceAiThreadInfo,
 	InstanceAiThreadListResponse,
 	InstanceAiThreadMessagesResponse,
+	InstanceAiThreadOrigin,
+	InstanceAiThreadSourcePersisted,
 } from '@n8n/api-types';
 import { Logger } from '@n8n/backend-common';
 import { GlobalConfig } from '@n8n/config';
@@ -29,6 +31,12 @@ import {
 import { InstanceAiCheckpointRepository } from './repositories/instance-ai-checkpoint.repository';
 import { InstanceAiPendingConfirmationRepository } from './repositories/instance-ai-pending-confirmation.repository';
 import { TypeORMAgentMemory } from './storage/typeorm-agent-memory';
+
+export interface InstanceAiThreadLaunchMetadata {
+	source: InstanceAiThreadSourcePersisted;
+	origin: InstanceAiThreadOrigin;
+	sourceContext?: Record<string, unknown>;
+}
 
 function isAgentMessageLike(value: unknown): value is AgentDbMessage {
 	return (
@@ -115,6 +123,7 @@ export class InstanceAiMemoryService {
 		userId: string,
 		threadId: string,
 		projectId: string,
+		launchMetadata?: InstanceAiThreadLaunchMetadata,
 	): Promise<InstanceAiEnsureThreadResponse> {
 		const existing = await this.agentMemory.getThread(threadId);
 		if (existing) {
@@ -133,6 +142,17 @@ export class InstanceAiMemoryService {
 				id: threadId,
 				resourceId: userId,
 				title: '',
+				...(launchMetadata
+					? {
+							metadata: {
+								source: launchMetadata.source,
+								origin: launchMetadata.origin,
+								...(launchMetadata.sourceContext
+									? { sourceContext: launchMetadata.sourceContext }
+									: {}),
+							},
+						}
+					: {}),
 			},
 			projectId,
 		);
@@ -317,6 +337,16 @@ export class InstanceAiMemoryService {
 			createSubAgentResourceIdPrefix(threadId),
 		);
 		await this.agentMemory.deleteThread(threadId);
+	}
+
+	/**
+	 * Remove every thread owned by a user, the sub-agent threads spawned under
+	 * them, and their working-memory resources. Invoked on user deletion to
+	 * avoid orphaning Instance AI data. Returns the number of owner threads
+	 * deleted.
+	 */
+	async deleteThreadsForUser(userId: string): Promise<number> {
+		return await this.agentMemory.deleteThreadsByResourceId(userId);
 	}
 
 	async renameThread(threadId: string, title: string): Promise<InstanceAiThreadInfo> {
