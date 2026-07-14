@@ -93,3 +93,5 @@ stryker.log
 # Local production env files (contain domain secrets)
 .env.prod
 start-n8n-prod.sh
+
+config/
