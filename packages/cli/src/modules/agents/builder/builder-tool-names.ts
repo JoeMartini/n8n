@@ -1,6 +1,6 @@
 /**
- * Tool names used by the agent builder. Centralised so prompts, the SSE event
- * routing, and tests can't drift on string typos.
+ * Tool names used by the agent builder. Centralised so tool implementations,
+ * prompts, and tests can't drift on string typos.
  *
  * The interactive tools (`ask_credential`, `ask_embedding_credential`,
  * `ask_questions`, `configure_channel`) are NOT listed here — their names live
@@ -14,8 +14,8 @@ export const BUILDER_TOOLS = {
 	WRITE_CONFIG: 'write_config',
 	PATCH_CONFIG: 'patch_config',
 	BUILD_CUSTOM_TOOL: 'build_custom_tool',
-	CREATE_SKILL: 'create_skill',
-	CREATE_TASK: 'create_task',
+	CREATE_SKILLS: 'create_skills',
+	CREATE_TASKS: 'create_tasks',
 	GET_RESOURCE_LOCATOR_OPTIONS: 'get_resource_locator_options',
 	LIST_INTEGRATION_TYPES: 'list_integration_types',
 	LIST_SUB_AGENTS: 'list_sub_agents',
@@ -26,8 +26,7 @@ export const BUILDER_TOOLS = {
 
 export type BuilderToolName = (typeof BUILDER_TOOLS)[keyof typeof BUILDER_TOOLS];
 
-/** Thread-id prefixes scoping different chat surfaces of the same agent. */
+/** Thread-id prefix scoping the test-chat surface of an agent. */
 export const AGENT_THREAD_PREFIX = {
 	TEST: 'test-',
-	BUILDER: 'builder:',
 } as const;
