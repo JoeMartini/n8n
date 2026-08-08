@@ -1,4 +1,5 @@
 node_modules
+.pnpm-store
 .DS_Store
 .tmp
 .tmp-schema-docs
@@ -89,10 +90,12 @@ lefthook-local.yml
 IMPROVEMENTS.md
 .playwright-mcp
 stryker.log
-.env.dev
 
-# Local production env files (contain domain secrets)
+# Generated migration indexes (scripts/generate-migration-index.mjs)
+packages/@n8n/db/src/migrations/sqlite/index.ts
+packages/@n8n/db/src/migrations/postgresdb/index.ts
+
+# Local config
+config/n8n-local/
 .env.prod
 start-n8n-prod.sh
-
-config/
