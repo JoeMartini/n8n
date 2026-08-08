@@ -1,0 +1,47 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${ secrets.GITHUB_TOKEN }
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream
+        run: git remote add upstream https://github.com/n8n-io/n8n.git
+
+      - name: Fetch upstream
+        run: git fetch upstream master
+
+      - name: Merge upstream
+        run: |
+          if git merge upstream/master --no-edit; then
+            git push origin master
+          else
+            git merge --abort
+            git checkout -b sync-upstream-$(date +%Y%m%d)
+            git push origin sync-upstream-$(date +%Y%m%d)
+            gh pr create \
+              --title "sync: upstream master $(date +%Y-%m-%d)" \
+              --body "Automated upstream sync. Merge conflicts detected — manual resolution required." \
+              --base master
+          fi
+        env:
+          GH_TOKEN: ${ secrets.GITHUB_TOKEN }
